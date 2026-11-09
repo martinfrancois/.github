@@ -53,7 +53,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: read
-    uses: martinfrancois/.github/.github/workflows/claim-issue.yml@<release commit SHA> # v1.0.0
+    uses: martinfrancois/.github/.github/workflows/claim-issue.yml@<release commit SHA> # v1.1.0
     with:
       max-open-claims: 3
 ```
@@ -73,7 +73,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: read
-    uses: martinfrancois/.github/.github/workflows/claim-reminders.yml@<release commit SHA> # v1.0.0
+    uses: martinfrancois/.github/.github/workflows/claim-reminders.yml@<release commit SHA> # v1.1.0
     with:
       nudge-after-days: 14
       unassign-after-days: 7
@@ -94,7 +94,7 @@ jobs:
     permissions:
       issues: read
       pull-requests: write
-    uses: martinfrancois/.github/.github/workflows/pr-claim-check.yml@<release commit SHA> # v1.0.0
+    uses: martinfrancois/.github/.github/workflows/pr-claim-check.yml@<release commit SHA> # v1.1.0
 ```
 
 The repository also needs the `claim conflict` label (or the label passed as `conflict-label`) and the claim labels.

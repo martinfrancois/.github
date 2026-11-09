@@ -21,7 +21,7 @@ on:
 permissions: {}
 jobs:
   claim:
-    # Comments on pull requests and comments from bots never claim anything.
+    # Comments on pull requests and comments from bots are ignored.
     if: ${{ !github.event.issue.pull_request && github.event.comment.user.type != 'Bot' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
