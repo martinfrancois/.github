@@ -30,7 +30,7 @@ Job permissions to grant: `issues: write`, `pull-requests: read`.
 
 ### `pr-claim-check.yml`
 
-Called from a `pull_request_target` workflow. A pull request that closes an issue its author doesn't hold, or that another open pull request already closes, gets one comment (updated on later runs) and the conflict label. When a later run finds nothing, the label goes and the comment says so. A pull request that closes no issue passes, and pull requests from maintainers and bots are skipped. It reads metadata through the API only and never checks out or runs pull request code.
+Called from a scheduled workflow. It scans the open pull requests: one that closes an issue its author doesn't hold, or an issue that another open pull request already closes, gets one comment and the conflict label. A later run updates the comment only when the findings change, and when it finds nothing, the label goes and the comment says so. If a maintainer removes the label while the findings stay the same, it stays removed. A pull request that closes no issue passes, and pull requests from maintainers and bots, and pull requests opened before the claim flow started on 2026-11-09, are skipped. It reads metadata through the API only and never checks out or runs pull request code. It runs on a schedule because GitHub blocks `pull_request_target` by default on public repositories.
 
 | Input            | Type   | Default          | Meaning                                                                         |
 | ---------------- | ------ | ---------------- | ------------------------------------------------------------------------------- |
@@ -53,7 +53,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: read
-    uses: martinfrancois/.github/.github/workflows/claim-issue.yml@<release commit SHA> # v1.1.0
+    uses: martinfrancois/.github/.github/workflows/claim-issue.yml@<release commit SHA> # v1.2.0
     with:
       max-open-claims: 3
 ```
@@ -73,7 +73,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: read
-    uses: martinfrancois/.github/.github/workflows/claim-reminders.yml@<release commit SHA> # v1.1.0
+    uses: martinfrancois/.github/.github/workflows/claim-reminders.yml@<release commit SHA> # v1.2.0
     with:
       nudge-after-days: 14
       unassign-after-days: 7
@@ -82,19 +82,19 @@ jobs:
 ```yaml
 name: PR claim check
 on:
-  pull_request_target:
-    # synchronize reruns the check on a push, for example after a `/take`.
-    types: [opened, edited, reopened, synchronize]
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
 permissions: {}
 concurrency:
-  group: pr-claim-check-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: pr-claim-check
+  cancel-in-progress: false
 jobs:
   check:
     permissions:
       issues: read
       pull-requests: write
-    uses: martinfrancois/.github/.github/workflows/pr-claim-check.yml@<release commit SHA> # v1.1.0
+    uses: martinfrancois/.github/.github/workflows/pr-claim-check.yml@<release commit SHA> # v1.2.0
 ```
 
 The repository also needs the `claim conflict` label (or the label passed as `conflict-label`) and the claim labels.
@@ -104,7 +104,7 @@ The repository also needs the `claim conflict` label (or the label passed as `co
 - No `${{ }}` expression carries comment, title or body text into a script. The scripts read the event payload as data, and there are no `run:` steps.
 - Bot replies repeat only logins and numbers, never comment text. Other people's logins appear in backticks, so they aren't pinged.
 - The markers that drive the reminder, hint and pull request comments only count when a bot wrote them, so nobody can fake a reminder to get someone unassigned early.
-- `pull_request_target` runs the caller from the default branch, so a pull request can't change what runs, and nothing here checks out pull request code.
+- Nothing runs on `pull_request_target`. The scheduled runs use the default branch's workflow, so a pull request can't change what runs, and nothing here checks out pull request code.
 - Comments made with `GITHUB_TOKEN` don't trigger workflows, and bot comments are skipped, so the workflows can't loop.
 
 ## Releases
