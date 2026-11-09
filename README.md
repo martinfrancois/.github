@@ -8,7 +8,7 @@ The flow exists so contributors don't spend time on pull requests that collide w
 
 ### `claim-issue.yml`
 
-Called from an `issue_comment` workflow. A comment with a line that reads `/take` (outside quotes and code) assigns the commenter if the issue has one of the claim labels, nobody holds it, no open pull request in the repository closes or mentions it, and the commenter holds fewer than `max-open-claims` open issues there. Otherwise it replies with the reason. If two claims race, the earlier assignment wins and the later claimer gets a reply. A request in plain words ("can I take this", "can I work on this", "assign me", and the other phrases listed in the workflow) gets one answer per person and issue saying whether `/take` would work; it never assigns anyone. Maintainers (`OWNER`, `MEMBER`, `COLLABORATOR`) have no cap. Bot comments are ignored.
+Called from an `issue_comment` workflow. A comment with a line that reads `/take` (outside quotes and code) assigns the commenter if the issue has one of the claim labels, nobody holds it, no open pull request in the repository closes or mentions it, and the commenter holds fewer than `max-open-claims` open issues there. Otherwise it replies with the reason. If two claims race, the earlier assignment wins and the later claimer gets a reply. A request in plain words ("can I take this", "can I work on this", "assign me", and the other phrases listed in the workflow) gets one answer per person and issue saying whether `/take` would work; it never assigns anyone. Maintainers (`OWNER`, `MEMBER`, `COLLABORATOR`) have no cap. Comments on pull requests and comments from bots are ignored.
 
 | Input             | Type   | Default                        | Meaning                                               |
 | ----------------- | ------ | ------------------------------ | ----------------------------------------------------- |
@@ -30,7 +30,7 @@ Job permissions to grant: `issues: write`, `pull-requests: read`.
 
 ### `pr-claim-check.yml`
 
-Called from a `pull_request_target` workflow. A pull request that closes an issue its author doesn't hold, or that another open pull request already closes, gets one comment (updated on later runs) and the conflict label. When a later run finds nothing, the label goes and the comment says so. A pull request that closes no issue passes. It reads metadata through the API only and never checks out or runs pull request code.
+Called from a `pull_request_target` workflow. A pull request that closes an issue its author doesn't hold, or that another open pull request already closes, gets one comment (updated on later runs) and the conflict label. When a later run finds nothing, the label goes and the comment says so. A pull request that closes no issue passes, and pull requests from maintainers and bots are skipped. It reads metadata through the API only and never checks out or runs pull request code.
 
 | Input            | Type   | Default          | Meaning                                                                         |
 | ---------------- | ------ | ---------------- | ------------------------------------------------------------------------------- |
@@ -50,7 +50,6 @@ on:
 permissions: {}
 jobs:
   claim:
-    if: ${{ !github.event.issue.pull_request && github.event.comment.user.type != 'Bot' }}
     permissions:
       issues: write
       pull-requests: read
@@ -84,6 +83,7 @@ jobs:
 name: PR claim check
 on:
   pull_request_target:
+    # synchronize reruns the check on a push, for example after a `/take`.
     types: [opened, edited, reopened, synchronize]
 permissions: {}
 concurrency:
@@ -91,7 +91,6 @@ concurrency:
   cancel-in-progress: true
 jobs:
   check:
-    if: ${{ github.event.pull_request.user.type != 'Bot' && !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) }}
     permissions:
       issues: read
       pull-requests: write
