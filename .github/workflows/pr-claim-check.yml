@@ -1,17 +1,18 @@
 name: PR claim check
 # Reusable workflow behind the pull request claim check in martinfrancois's OSS
-# repositories. A repository calls it from a scheduled workflow.
+# repositories. A repository calls it from a scheduled workflow, because GitHub
+# blocks pull_request_target by default on public repositories.
 #
 # Scans the open pull requests from contributors and comments on and labels
 # one that closes an issue its author doesn't hold, or an issue that another
 # open pull request already closes. A pull request that closes no issue (a
-# small fix) passes. Each pull request gets at most one comment, updated in
-# place when the findings change. Pull requests opened before the claim flow
-# started are left alone, because their authors couldn't know about it.
+# small fix) passes. Each pull request gets at most one comment, edited when
+# the findings change, and the label only with that first comment, so a label
+# a maintainer removes stays removed. Pull requests opened before
+# `skip-opened-before` are left alone unless they carry the label.
 #
-# It runs on a schedule instead of pull_request_target, which GitHub blocks
-# by default on public repositories. Never check out or run code from a pull
-# request here, only read metadata through the API.
+# Never check out or run code from a pull request here, only read metadata
+# through the API.
 on:
   workflow_call:
     inputs:
@@ -19,9 +20,17 @@ on:
         description: Label added to a pull request with a claim conflict. It must exist in the repository.
         type: string
         default: claim conflict
+      skip-opened-before:
+        description: Pull requests opened before this time (ISO 8601) aren't checked, because their authors couldn't know the claim flow.
+        type: string
+        default: "2026-11-09T00:00:00Z"
 permissions: {}
 jobs:
   check:
+    # One scan at a time per repository, whatever triggers the caller.
+    concurrency:
+      group: pr-claim-check-scan-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -29,14 +38,22 @@ jobs:
       pull-requests: write
     env:
       CONFLICT_LABEL: ${{ inputs.conflict-label }}
+      SKIP_OPENED_BEFORE: ${{ inputs.skip-opened-before }}
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const { owner, repo } = context.repo;
             const label = process.env.CONFLICT_LABEL;
+            const skipOpenedBefore = Date.parse(process.env.SKIP_OPENED_BEFORE);
+            if (Number.isNaN(skipOpenedBefore)) {
+              throw new Error(`skip-opened-before isn't a date: ${process.env.SKIP_OPENED_BEFORE}`);
+            }
             const marker = "<!-- pr-claim-check -->";
-            const flowStart = Date.parse("2026-11-09T00:00:00Z");
+            // The comment's second line records what it reported, so a later
+            // run compares findings, not wording.
+            const findingsLine = (key) => `<!-- findings: ${key} -->`;
+            const findingsOf = (body) => body.split("\n")[1]?.match(/^<!-- findings: (.*) -->$/)?.[1];
 
             // GitHub resolves the closing keywords itself; read its answer
             // instead of parsing the descriptions.
@@ -75,42 +92,50 @@ jobs:
               after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
             } while (after);
 
-            const problemsOf = (pr) => {
-              const author = pr.author.login;
+            const problemsOf = (pr, issues, author) => {
               const problems = [];
-              for (const issue of pr.closingIssuesReferences.nodes) {
-                if (issue.repository.nameWithOwner !== `${owner}/${repo}`) continue;
+              for (const issue of issues) {
                 const assignees = issue.assignees.nodes.map((a) => a.login);
                 if (assignees.length === 0) {
-                  problems.push(`#${issue.number} isn't assigned to you yet.`);
+                  problems.push({
+                    key: `#${issue.number}:unassigned`,
+                    text: `#${issue.number} isn't assigned to you yet.`,
+                  });
                 } else if (!assignees.includes(author)) {
-                  problems.push(
-                    `#${issue.number} is assigned to ${assignees.map((l) => `\`${l}\``).join(", ")}.`,
-                  );
+                  problems.push({
+                    key: `#${issue.number}:held:${assignees.join(",")}`,
+                    text: `#${issue.number} is assigned to ${assignees.map((l) => `\`${l}\``).join(", ")}.`,
+                  });
                 }
                 const otherPrs = issue.closedByPullRequestsReferences.nodes
                   .map((p) => p.number)
                   .filter((n) => n !== pr.number);
                 if (otherPrs.length > 0) {
-                  problems.push(
-                    `#${issue.number} already has an open pull request: ${otherPrs.map((n) => `#${n}`).join(", ")}.`,
-                  );
+                  problems.push({
+                    key: `#${issue.number}:open:${otherPrs.join(",")}`,
+                    text: `#${issue.number} already has an open pull request: ${otherPrs.map((n) => `#${n}`).join(", ")}.`,
+                  });
                 }
               }
               return problems;
             };
 
-            const conflictBody = (author, problems) =>
+            const conflictBody = (author, problems, key) =>
               [
                 marker,
+                findingsLine(key),
                 `@${author} Thanks for the pull request! Before it goes further, please check this:`,
                 "",
-                ...problems.map((p) => `- ${p}`),
+                ...problems.map((p) => `- ${p.text}`),
                 "",
-                "Before starting on an issue, check that nobody is assigned to it and that no open pull request addresses it, then claim it by commenting `/take` on the issue and wait for the assignment (see CONTRIBUTING.md). That way two people don't do the same work. If the issue is free, comment `/take` on it now. martinfrancois will decide which pull request goes ahead if two overlap. This check runs every hour and updates this comment.",
+                "Before starting on an issue, check that nobody is assigned to it and that no open pull request addresses it, then claim it by commenting `/take` on the issue and wait for the assignment (see CONTRIBUTING.md). That way two people don't do the same work. If the issue is free, comment `/take` on it now. martinfrancois will decide which pull request goes ahead if two overlap. This check runs again regularly and updates this comment.",
               ].join("\n");
             const resolvedBody = (author) =>
-              `${marker}\n@${author} Thanks, everything this check raised earlier is resolved.`;
+              [
+                marker,
+                findingsLine("none"),
+                `@${author} Thanks, everything this check raised earlier is resolved.`,
+              ].join("\n");
 
             for (const pr of pullRequests) {
               // Maintainers may open a pull request for any issue, and bots
@@ -118,14 +143,17 @@ jobs:
               if (!pr.author || pr.author.__typename === "Bot") continue;
               if (["OWNER", "MEMBER", "COLLABORATOR"].includes(pr.authorAssociation)) continue;
 
-              const author = pr.author.login;
-              const problems = problemsOf(pr);
               const labelled = pr.labels.nodes.some((l) => l.name === label);
-              // Most pull requests have nothing to report and no earlier
-              // finding, so they cost no further calls.
-              if (problems.length === 0 && !labelled) continue;
-              if (!labelled && Date.parse(pr.createdAt) < flowStart) continue;
+              if (!labelled && Date.parse(pr.createdAt) < skipOpenedBefore) continue;
+              const issues = pr.closingIssuesReferences.nodes.filter(
+                (issue) => issue.repository.nameWithOwner === `${owner}/${repo}`,
+              );
+              // A pull request that closes no issue here and has no label never
+              // had anything to report, so it costs no further calls.
+              if (issues.length === 0 && !labelled) continue;
 
+              const author = pr.author.login;
+              const problems = problemsOf(pr, issues, author);
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner,
                 repo,
@@ -136,41 +164,39 @@ jobs:
               const existing = comments.find(
                 (c) => c.user?.type === "Bot" && c.body?.startsWith(marker),
               );
+              const reported = existing ? findingsOf(existing.body) : undefined;
 
               if (problems.length === 0) {
-                // A `/take` or an edit cleared the findings.
-                try {
-                  await github.rest.issues.removeLabel({
-                    owner,
-                    repo,
-                    issue_number: pr.number,
-                    name: label,
-                  });
-                } catch (error) {
-                  if (error.status !== 404) throw error;
+                // The findings cleared, for example after a `/take`, an
+                // assignment by a maintainer or the other pull request closing.
+                if (labelled) {
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner,
+                      repo,
+                      issue_number: pr.number,
+                      name: label,
+                    });
+                    core.info(`#${pr.number}: removed the label`);
+                  } catch (error) {
+                    if (error.status !== 404) throw error;
+                  }
                 }
-                if (existing && existing.body !== resolvedBody(author)) {
+                if (existing && reported !== "none") {
                   await github.rest.issues.updateComment({
                     owner,
                     repo,
                     comment_id: existing.id,
                     body: resolvedBody(author),
                   });
+                  core.info(`#${pr.number}: resolved`);
                 }
                 continue;
               }
 
-              const body = conflictBody(author, problems);
-              // Same findings as last time: nothing to say again. If a
-              // maintainer removed the label since, it stays removed.
-              if (existing?.body === body) continue;
-
-              await github.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number: pr.number,
-                labels: [label],
-              });
+              const key = problems.map((p) => p.key).join(" ");
+              if (reported === key) continue;
+              const body = conflictBody(author, problems, key);
               if (existing) {
                 await github.rest.issues.updateComment({
                   owner,
@@ -179,6 +205,12 @@ jobs:
                   body,
                 });
               } else {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: pr.number,
+                  labels: [label],
+                });
                 await github.rest.issues.createComment({
                   owner,
                   repo,
@@ -186,5 +218,5 @@ jobs:
                   body,
                 });
               }
-              core.info(`#${pr.number}: ${problems.join(" ")}`);
+              core.info(`#${pr.number}: ${problems.map((p) => p.text).join(" ")}`);
             }

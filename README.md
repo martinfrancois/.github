@@ -30,11 +30,12 @@ Job permissions to grant: `issues: write`, `pull-requests: read`.
 
 ### `pr-claim-check.yml`
 
-Called from a scheduled workflow. It scans the open pull requests: one that closes an issue its author doesn't hold, or an issue that another open pull request already closes, gets one comment and the conflict label. A later run updates the comment only when the findings change, and when it finds nothing, the label goes and the comment says so. If a maintainer removes the label while the findings stay the same, it stays removed. A pull request that closes no issue passes, and pull requests from maintainers and bots, and pull requests opened before the claim flow started on 2026-11-09, are skipped. It reads metadata through the API only and never checks out or runs pull request code. It runs on a schedule because GitHub blocks `pull_request_target` by default on public repositories.
+Called from a scheduled workflow, because GitHub blocks `pull_request_target` by default on public repositories. It scans the open pull requests: one that closes an issue its author doesn't hold, or an issue that another open pull request already closes, gets one comment and the conflict label. Later runs edit the comment only when the findings change and never add the label again, so a label a maintainer removes stays removed. When the findings clear, the label goes and the comment says so. A pull request that closes no issue passes. Pull requests from maintainers and bots are skipped, and so are pull requests opened before `skip-opened-before` unless they carry the label. Scans in one repository never overlap. It reads metadata through the API only and never checks out or runs pull request code.
 
-| Input            | Type   | Default          | Meaning                                                                         |
-| ---------------- | ------ | ---------------- | ------------------------------------------------------------------------------- |
-| `conflict-label` | string | `claim conflict` | Label for a pull request with a claim conflict; it must exist in the repository |
+| Input                | Type   | Default                | Meaning                                                                         |
+| -------------------- | ------ | ---------------------- | ------------------------------------------------------------------------------- |
+| `conflict-label`     | string | `claim conflict`       | Label for a pull request with a claim conflict; it must exist in the repository |
+| `skip-opened-before` | string | `2026-11-09T00:00:00Z` | Pull requests opened before this time (ISO 8601) aren't checked                 |
 
 Job permissions to grant: `issues: read`, `pull-requests: write`.
 
@@ -99,12 +100,14 @@ jobs:
 
 The repository also needs the `claim conflict` label (or the label passed as `conflict-label`) and the claim labels.
 
+GitHub turns off scheduled workflows in a public repository after 60 days without activity there. The reminders and the pull request check then stop until someone turns them back on in the repository's Actions tab.
+
 ## Security
 
 - No `${{ }}` expression carries comment, title or body text into a script. The scripts read the event payload as data, and there are no `run:` steps.
 - Bot replies repeat only logins and numbers, never comment text. Other people's logins appear in backticks, so they aren't pinged.
 - The markers that drive the reminder, hint and pull request comments only count when a bot wrote them, so nobody can fake a reminder to get someone unassigned early.
-- Nothing runs on `pull_request_target`. The scheduled runs use the default branch's workflow, so a pull request can't change what runs, and nothing here checks out pull request code.
+- The documented callers don't use `pull_request_target`. Scheduled runs use the default branch's workflow, so a pull request can't change what runs, and nothing here checks out pull request code.
 - Comments made with `GITHUB_TOKEN` don't trigger workflows, and bot comments are skipped, so the workflows can't loop.
 
 ## Releases
