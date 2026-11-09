@@ -103,7 +103,7 @@ jobs:
                   });
                 } else if (!assignees.includes(author)) {
                   problems.push({
-                    key: `#${issue.number}:held:${assignees.join(",")}`,
+                    key: `#${issue.number}:held:${[...assignees].sort().join(",")}`,
                     text: `#${issue.number} is assigned to ${assignees.map((l) => `\`${l}\``).join(", ")}.`,
                   });
                 }
@@ -112,7 +112,7 @@ jobs:
                   .filter((n) => n !== pr.number);
                 if (otherPrs.length > 0) {
                   problems.push({
-                    key: `#${issue.number}:open:${otherPrs.join(",")}`,
+                    key: `#${issue.number}:open:${[...otherPrs].sort((a, b) => a - b).join(",")}`,
                     text: `#${issue.number} already has an open pull request: ${otherPrs.map((n) => `#${n}`).join(", ")}.`,
                   });
                 }
